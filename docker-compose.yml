@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: instatrack
+      POSTGRES_USER: instatrack
+      POSTGRES_PASSWORD: local-password
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://instatrack:local-password@db:5432/instatrack
+      TEAM_PASSWORD_HASH: ${TEAM_PASSWORD_HASH}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SECURE_COOKIES: "false"
+    ports: ["8080:8080"]
+    depends_on: [db]
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    environment:
+      DATABASE_URL: postgresql+psycopg://instatrack:local-password@db:5432/instatrack
+      COLLECTION_DELAY_SECONDS: "5"
+      COLLECTOR_ADAPTER: "scrapling"
+    depends_on: [db]
+    profiles: ["manual"]
+volumes:
+  postgres_data:

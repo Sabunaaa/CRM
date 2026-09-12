@@ -1,0 +1,5 @@
+project_id         = "your-gcp-project-id"
+region             = "europe-west1"
+api_image          = "europe-west1-docker.pkg.dev/your-gcp-project-id/instatrack/api:latest"
+collector_image    = "europe-west1-docker.pkg.dev/your-gcp-project-id/instatrack/collector:latest"
+team_password_hash = "$argon2id$v=19$m=65536,t=3,p=4$replace-this"

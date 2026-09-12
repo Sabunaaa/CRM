@@ -17,7 +17,7 @@ Anonymous Instagram collection is intentionally best effort. It stops on login c
 
 On macOS, double-click `start.command`. The first launch installs the required packages and Scrapling browser, builds the interface, starts the frontend and backend together, and opens `http://127.0.0.1:8080`.
 
-The default local team password is `instatrack`. To choose another password, launch from Terminal:
+The default local team password is `instatrack`. Team passwords must contain at least 8 characters. To choose another password, launch from Terminal:
 
 ```bash
 TEAM_PASSWORD='your-password' ./start.sh
@@ -59,6 +59,17 @@ The application is then available at `http://localhost:8080`. Run a manual colle
 ```bash
 docker compose --profile manual run --rm collector --trigger manual
 ```
+
+### Update a Compute Engine VM with one command
+
+The VM workflow keeps the application, PostgreSQL, and Scrapling collector in Docker Compose. From the cloned repository on the VM, run:
+
+```bash
+chmod +x scripts/update_vm.sh
+./scripts/update_vm.sh
+```
+
+The first run installs Docker, asks for the shared password, creates `.env`, builds both images, starts the stack, and installs the midnight/noon `Asia/Tbilisi` collector schedule. Later runs pull the selected Git branch (default `main`), rebuild changed images, restart the services, and preserve the existing secrets. Set `VM_BRANCH` before running if the VM should follow another branch.
 
 ## Validate anonymous collection
 

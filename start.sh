@@ -67,6 +67,10 @@ if [[ ! -f "$LOCAL_DIR/session-secret" ]]; then
 fi
 
 TEAM_PASSWORD="${TEAM_PASSWORD:-instatrack}"
+if [[ ${#TEAM_PASSWORD} -lt 8 ]]; then
+  echo "The team password must contain at least 8 characters."
+  exit 2
+fi
 TEAM_PASSWORD_HASH="$($VENV_DIR/bin/python -c 'from argon2 import PasswordHasher; import sys; print(PasswordHasher().hash(sys.argv[1]))' "$TEAM_PASSWORD")"
 SESSION_SECRET="$(cat "$LOCAL_DIR/session-secret")"
 DATABASE_URL="sqlite:///$LOCAL_DIR/instatrack.db"

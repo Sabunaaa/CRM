@@ -5,7 +5,10 @@ services:
       POSTGRES_DB: instatrack
       POSTGRES_USER: instatrack
       POSTGRES_PASSWORD: local-password
-    ports: ["5432:5432"]
+    # Keep PostgreSQL reachable from the VM itself for administration, but not
+    # from the public internet. The API and collector use the internal
+    # Compose network and do not need a host port.
+    ports: ["127.0.0.1:5432:5432"]
     volumes: ["postgres_data:/var/lib/postgresql/data"]
   api:
     build: .

@@ -5,5 +5,8 @@ export interface Reel { id:string; profile_id:string; shortcode:string; permalin
 export interface MetricSummary { value:number|null; previous_value:number|null; change_percent:number|null; observed_at:string|null; state:MetricState }
 export interface DashboardData { views:MetricSummary; likes:MetricSummary; comments:MetricSummary; followers:MetricSummary; views_series:Array<{observed_at:string;views:number|null}>; top_reels:Reel[]; recent_reels:Reel[] }
 export interface CollectionRun { id:string; status:string; trigger:string; started_at:string; completed_at:string|null; profiles_total:number; profiles_succeeded:number; profiles_failed:number; error:string|null }
+export interface KpiMetric { key:"profiles"|"reels"|"views_growth"|"followers_growth"; label:string; actual:number; target:number; unit:string; completion_percent:number|null }
+export interface ManagerKpi { manager:string; focus:string|null; metrics:KpiMetric[]; completion_percent:number|null; plan_updated_at:string|null }
+export interface WeeklyKpi { week_start:string; week_end:string; managers:ManagerKpi[]; team_completion_percent:number|null }
 export class ApiError extends Error { constructor(message:string, public status:number){super(message)} }
 export async function api<T>(path:string,options:RequestInit={}):Promise<T>{const response=await fetch(`/api${path}`,{credentials:"include",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});if(!response.ok){const body=await response.json().catch(()=>({detail:"Request failed"}));throw new ApiError(body.detail||"Request failed",response.status)}if(response.status===204)return undefined as T;return response.json()}

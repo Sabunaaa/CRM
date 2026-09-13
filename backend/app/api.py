@@ -18,8 +18,8 @@ from .auth import PERSONAS, client_key, create_token, enforce_login_limit, read_
 from .config import get_settings
 from .database import get_db
 from .instagram import normalize_instagram_profile_url
-from .models import CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile, utcnow
-from .schemas import DashboardResponse, LoginRequest, MetricSummary, PaginatedProfiles, PaginatedReels, PersonaRequest, ProfileCreate, ProfileOut, ReelOut, SessionResponse, SnapshotPoint
+from .models import CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile, WeeklyKpiPlan, utcnow
+from .schemas import DashboardResponse, KpiMetricOut, KpiPlanUpdate, LoginRequest, ManagerKpiOut, MetricSummary, PaginatedProfiles, PaginatedReels, PersonaRequest, ProfileCreate, ProfileOut, ReelOut, SessionResponse, SnapshotPoint, WeeklyKpiResponse
 
 router = APIRouter(prefix="/api")
 
@@ -61,6 +61,72 @@ def _change(current: int | None, previous: int | None) -> float | None:
     if current is None or previous in (None, 0):
         return None
     return round((current - previous) / previous * 100, 2)
+
+
+def _week_dates(value: date | None) -> tuple[date, date, datetime, datetime]:
+    local_tz = ZoneInfo(get_settings().app_timezone)
+    selected = value or datetime.now(local_tz).date()
+    monday = selected - timedelta(days=selected.weekday())
+    sunday = monday + timedelta(days=6)
+    start_at = datetime.combine(monday, time.min, tzinfo=local_tz).astimezone(timezone.utc)
+    end_at = datetime.combine(sunday, time.max, tzinfo=local_tz).astimezone(timezone.utc)
+    return monday, sunday, start_at, end_at
+
+
+def _snapshot_growth(rows: list[tuple[str, int, datetime]]) -> int:
+    grouped: dict[str, list[tuple[datetime, int]]] = {}
+    for entity_id, value, observed_at in rows:
+        normalized_at = observed_at if observed_at.tzinfo else observed_at.replace(tzinfo=timezone.utc)
+        grouped.setdefault(entity_id, []).append((normalized_at, value))
+    total = 0
+    for observations in grouped.values():
+        observations.sort(key=lambda item: item[0])
+        total += observations[-1][1] - observations[0][1]
+    return total
+
+
+def _completion(actual: int, target: int) -> float | None:
+    if target <= 0:
+        return None
+    return round(max(0, actual) / target * 100, 1)
+
+
+def _weekly_kpis(db: Session, selected_week: date | None) -> WeeklyKpiResponse:
+    monday, sunday, start_at, end_at = _week_dates(selected_week)
+    plans = {plan.manager: plan for plan in db.scalars(select(WeeklyKpiPlan).where(WeeklyKpiPlan.week_start == monday)).all()}
+    managers: list[ManagerKpiOut] = []
+    team_percentages: list[float] = []
+
+    for manager in ("Dachi", "Lui", "Saba"):
+        profile_ids = list(db.scalars(select(TrackedProfile.id).where(TrackedProfile.added_by == manager)).all())
+        profiles_added = db.scalar(select(func.count(TrackedProfile.id)).where(TrackedProfile.added_by == manager, TrackedProfile.created_at >= start_at, TrackedProfile.created_at <= end_at)) or 0
+        reels_added = 0
+        followers_growth = 0
+        views_growth = 0
+        if profile_ids:
+            reels_added = db.scalar(select(func.count(Reel.id)).where(Reel.profile_id.in_(profile_ids), Reel.first_seen_at >= start_at, Reel.first_seen_at <= end_at)) or 0
+            follower_rows = db.execute(select(ProfileSnapshot.profile_id, ProfileSnapshot.followers_count, ProfileSnapshot.observed_at).where(ProfileSnapshot.profile_id.in_(profile_ids), ProfileSnapshot.followers_count.is_not(None), ProfileSnapshot.observed_at >= start_at, ProfileSnapshot.observed_at <= end_at).order_by(ProfileSnapshot.observed_at)).all()
+            followers_growth = _snapshot_growth([(row[0], int(row[1]), row[2]) for row in follower_rows])
+            reel_ids = list(db.scalars(select(Reel.id).where(Reel.profile_id.in_(profile_ids))).all())
+            if reel_ids:
+                view_rows = db.execute(select(ReelSnapshot.reel_id, ReelSnapshot.views_count, ReelSnapshot.observed_at).where(ReelSnapshot.reel_id.in_(reel_ids), ReelSnapshot.views_count.is_not(None), ReelSnapshot.observed_at >= start_at, ReelSnapshot.observed_at <= end_at).order_by(ReelSnapshot.observed_at)).all()
+                views_growth = _snapshot_growth([(row[0], int(row[1]), row[2]) for row in view_rows])
+
+        plan = plans.get(manager)
+        values = (
+            ("profiles", "Profiles added", int(profiles_added), plan.profiles_target if plan else 0, "profiles"),
+            ("reels", "Reels discovered", int(reels_added), plan.reels_target if plan else 0, "reels"),
+            ("views_growth", "Reel-view growth", views_growth, plan.views_growth_target if plan else 0, "views"),
+            ("followers_growth", "Follower growth", followers_growth, plan.followers_growth_target if plan else 0, "followers"),
+        )
+        metrics = [KpiMetricOut(key=key, label=label, actual=actual, target=target, unit=unit, completion_percent=_completion(actual, target)) for key, label, actual, target, unit in values]
+        planned = [metric.completion_percent for metric in metrics if metric.completion_percent is not None]
+        completion = round(sum(planned) / len(planned), 1) if planned else None
+        if completion is not None:
+            team_percentages.append(completion)
+        managers.append(ManagerKpiOut(manager=manager, focus=plan.focus if plan else None, metrics=metrics, completion_percent=completion, plan_updated_at=plan.updated_at if plan else None))
+
+    return WeeklyKpiResponse(week_start=monday, week_end=sunday, managers=managers, team_completion_percent=round(sum(team_percentages) / len(team_percentages), 1) if team_percentages else None)
 
 
 async def _trigger_collector_job(username: str | None = None) -> None:
@@ -286,6 +352,28 @@ def dashboard(days: int = Query(30, ge=1, le=365), start_date: date | None = Que
 def collection_runs(limit: int = Query(20, ge=1, le=100), _: dict = Depends(require_session), db: Session = Depends(get_db)):
     rows = db.scalars(select(CollectionRun).order_by(desc(CollectionRun.started_at)).limit(limit)).all()
     return [{"id": r.id, "status": r.status.value, "trigger": r.trigger, "started_at": r.started_at, "completed_at": r.completed_at, "profiles_total": r.profiles_total, "profiles_succeeded": r.profiles_succeeded, "profiles_failed": r.profiles_failed, "error": r.error} for r in rows]
+
+
+@router.get("/kpi/weekly", response_model=WeeklyKpiResponse)
+def weekly_kpis(week_start: date | None = Query(None), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+    return _weekly_kpis(db, week_start)
+
+
+@router.put("/kpi/weekly", response_model=WeeklyKpiResponse)
+def save_weekly_kpi_plan(payload: KpiPlanUpdate, week_start: date | None = Query(None), persona: str = Depends(require_persona), db: Session = Depends(get_db)):
+    monday, _, _, _ = _week_dates(week_start)
+    plan = db.scalar(select(WeeklyKpiPlan).where(WeeklyKpiPlan.week_start == monday, WeeklyKpiPlan.manager == persona))
+    focus = payload.focus.strip() if payload.focus and payload.focus.strip() else None
+    if plan is None:
+        plan = WeeklyKpiPlan(week_start=monday, manager=persona, created_by=persona)
+        db.add(plan)
+    plan.profiles_target = payload.profiles_target
+    plan.reels_target = payload.reels_target
+    plan.views_growth_target = payload.views_growth_target
+    plan.followers_growth_target = payload.followers_growth_target
+    plan.focus = focus
+    db.commit()
+    return _weekly_kpis(db, monday)
 
 
 @router.post("/collection/run", status_code=status.HTTP_202_ACCEPTED)

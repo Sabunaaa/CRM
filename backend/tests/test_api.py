@@ -1,7 +1,9 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import MetricState, Reel, TrackedProfile
+from datetime import datetime, timezone
+
+from app.models import CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile
 
 
 def signed_in_client(persona="Saba"):
@@ -66,3 +68,38 @@ def test_manual_collection_requires_a_persona_and_queues():
     response = client.post("/api/collection/run")
     assert response.status_code == 202
     assert response.json() == {"status": "queued"}
+
+
+def test_weekly_kpi_plan_is_shared_and_uses_snapshot_growth(db):
+    profile = TrackedProfile(username="kpi_creator", instagram_url="https://instagram.com/kpi_creator/", added_by="Dachi", created_at=datetime(2026, 9, 8, tzinfo=timezone.utc))
+    db.add(profile)
+    db.flush()
+    reel = Reel(profile_id=profile.id, shortcode="kpi_reel", permalink="https://instagram.com/reel/kpi_reel/", first_seen_at=datetime(2026, 9, 9, tzinfo=timezone.utc))
+    db.add(reel)
+    db.flush()
+    first_run = CollectionRun(schedule_key="kpi:first", trigger="manual", status=RunStatus.succeeded)
+    last_run = CollectionRun(schedule_key="kpi:last", trigger="manual", status=RunStatus.succeeded)
+    db.add_all([first_run, last_run])
+    db.flush()
+    db.add_all([
+        ProfileSnapshot(profile_id=profile.id, run_id=first_run.id, followers_count=100, state=MetricState.available, observed_at=datetime(2026, 9, 8, tzinfo=timezone.utc)),
+        ProfileSnapshot(profile_id=profile.id, run_id=last_run.id, followers_count=125, state=MetricState.available, observed_at=datetime(2026, 9, 13, tzinfo=timezone.utc)),
+        ReelSnapshot(reel_id=reel.id, run_id=first_run.id, views_count=1000, likes_count=10, comments_count=2, state=MetricState.available, observed_at=datetime(2026, 9, 9, tzinfo=timezone.utc)),
+        ReelSnapshot(reel_id=reel.id, run_id=last_run.id, views_count=1600, likes_count=15, comments_count=3, state=MetricState.available, observed_at=datetime(2026, 9, 13, tzinfo=timezone.utc)),
+    ])
+    db.commit()
+
+    dachi = signed_in_client("Dachi")
+    response = dachi.put("/api/kpi/weekly?week_start=2026-09-09", json={"profiles_target": 2, "reels_target": 3, "views_growth_target": 1000, "followers_growth_target": 50, "focus": "  Add strong creators  "})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["week_start"] == "2026-09-07"
+    plan = next(item for item in payload["managers"] if item["manager"] == "Dachi")
+    assert plan["focus"] == "Add strong creators"
+    actuals = {metric["key"]: metric["actual"] for metric in plan["metrics"]}
+    assert actuals == {"profiles": 1, "reels": 1, "views_growth": 600, "followers_growth": 25}
+
+    saba = signed_in_client("Saba")
+    shared = saba.get("/api/kpi/weekly?week_start=2026-09-07").json()
+    assert next(item for item in shared["managers"] if item["manager"] == "Dachi")["focus"] == "Add strong creators"
+    assert saba.put("/api/kpi/weekly?week_start=2026-09-07", json={"profiles_target": -1, "reels_target": 0, "views_growth_target": 0, "followers_growth_target": 0}).status_code == 422

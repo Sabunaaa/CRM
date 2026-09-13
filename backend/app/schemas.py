@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -91,3 +91,35 @@ class DashboardResponse(BaseModel):
     views_series: list[dict]
     top_reels: list[ReelOut]
     recent_reels: list[ReelOut]
+
+
+class KpiPlanUpdate(BaseModel):
+    profiles_target: int = Field(ge=0, le=100)
+    reels_target: int = Field(ge=0, le=3000)
+    views_growth_target: int = Field(ge=0, le=2_000_000_000)
+    followers_growth_target: int = Field(ge=0, le=2_000_000_000)
+    focus: str | None = Field(default=None, max_length=500)
+
+
+class KpiMetricOut(BaseModel):
+    key: str
+    label: str
+    actual: int
+    target: int
+    unit: str
+    completion_percent: float | None
+
+
+class ManagerKpiOut(BaseModel):
+    manager: str
+    focus: str | None
+    metrics: list[KpiMetricOut]
+    completion_percent: float | None
+    plan_updated_at: datetime | None
+
+
+class WeeklyKpiResponse(BaseModel):
+    week_start: date
+    week_end: date
+    managers: list[ManagerKpiOut]
+    team_completion_percent: float | None

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -143,3 +143,19 @@ class AuthAttempt(Base):
     succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
     attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     __table_args__ = (Index("ix_auth_attempt_client_time", "client_key", "attempted_at"),)
+
+
+class WeeklyKpiPlan(Base):
+    __tablename__ = "weekly_kpi_plans"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    week_start: Mapped[date] = mapped_column(Date, index=True)
+    manager: Mapped[str] = mapped_column(String(16), index=True)
+    profiles_target: Mapped[int] = mapped_column(Integer, default=0)
+    reels_target: Mapped[int] = mapped_column(Integer, default=0)
+    views_growth_target: Mapped[int] = mapped_column(Integer, default=0)
+    followers_growth_target: Mapped[int] = mapped_column(Integer, default=0)
+    focus: Mapped[Optional[str]] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    __table_args__ = (UniqueConstraint("week_start", "manager", name="uq_kpi_plan_week_manager"),)

@@ -38,6 +38,13 @@ def _unlock(db) -> None:
         db.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": LOCK_ID})
 
 
+def _outcome_log(outcome: CollectionOutcome, message: str) -> None:
+    timestamp = utcnow().isoformat(timespec="seconds")
+    lines = (outcome.message or "").splitlines()
+    lines.append(f"{timestamp}  {message}")
+    outcome.message = "\n".join(lines[-50:])
+
+
 def _upsert_profile_data(db, tracked: TrackedProfile, data, run: CollectionRun) -> int:
     observed_at = utcnow()
     tracked.display_name = data.display_name
@@ -102,12 +109,24 @@ def run_collection(trigger: str = "scheduled", username: str | None = None) -> i
         for index, profile in enumerate(profiles):
             outcome = CollectionOutcome(run_id=run.id, profile_id=profile.id, status=RunStatus.running)
             db.add(outcome)
+            _outcome_log(outcome, f"Starting @{profile.username} with {settings.collector_adapter}.")
             db.commit()
             error: Exception | None = None
             for attempt in range(settings.collection_max_retries + 1):
+                attempt_number = attempt + 1
+                attempts_total = settings.collection_max_retries + 1
+                _outcome_log(outcome, f"Attempt {attempt_number}/{attempts_total}: requesting the public profile and up to {settings.max_reels_per_profile} reels.")
+                db.commit()
                 try:
                     data = adapter.fetch_profile(profile.username, settings.max_reels_per_profile)
                     reels_observed = _upsert_profile_data(db, profile, data, run)
+                    views_found = sum(item.views_count is not None for item in data.reels)
+                    likes_found = sum(item.likes_count is not None for item in data.reels)
+                    comments_found = sum(item.comments_count is not None for item in data.reels)
+                    followers_result = f"{data.followers_count:,}" if data.followers_count is not None else "unavailable"
+                    _outcome_log(outcome, f"Public page fetched. Followers: {followers_result}; reels discovered: {reels_observed}.")
+                    _outcome_log(outcome, f"Reel metrics available — views: {views_found}/{reels_observed}, likes: {likes_found}/{reels_observed}, comments: {comments_found}/{reels_observed}.")
+                    _outcome_log(outcome, "Saved the new observations successfully.")
                     outcome.status = RunStatus.succeeded
                     outcome.reels_observed = reels_observed
                     outcome.completed_at = utcnow()
@@ -117,21 +136,30 @@ def run_collection(trigger: str = "scheduled", username: str | None = None) -> i
                     break
                 except CollectionThrottled as exc:
                     error = exc
+                    _outcome_log(outcome, f"Stopped by Instagram throttling ({type(exc).__name__}): {exc}")
+                    db.commit()
                     break
                 except CollectionUnavailable as exc:
                     error = exc
+                    _outcome_log(outcome, f"Public data was unavailable ({type(exc).__name__}): {exc}")
+                    db.commit()
                     break
                 except Exception as exc:
                     error = exc
+                    _outcome_log(outcome, f"Attempt {attempt_number}/{attempts_total} failed ({type(exc).__name__}): {exc}")
+                    db.commit()
                     if attempt < settings.collection_max_retries:
-                        time.sleep((2 ** attempt) + random.random())
+                        retry_delay = (2 ** attempt) + random.random()
+                        _outcome_log(outcome, f"Retrying after {retry_delay:.1f} seconds.")
+                        db.commit()
+                        time.sleep(retry_delay)
             if error:
                 profile.last_error = str(error)
                 profile.followers_state = MetricState.stale if profile.followers_count is not None else MetricState.failed
                 for reel in db.scalars(select(Reel).where(Reel.profile_id == profile.id)):
                     reel.metrics_state = MetricState.stale if any(value is not None for value in (reel.views_count, reel.likes_count, reel.comments_count)) else MetricState.failed
                 outcome.status = RunStatus.failed
-                outcome.message = str(error)
+                _outcome_log(outcome, "Collection failed. Previously successful values were preserved.")
                 outcome.completed_at = utcnow()
                 run.profiles_failed += 1
                 db.commit()
@@ -146,6 +174,14 @@ def run_collection(trigger: str = "scheduled", username: str | None = None) -> i
         db.commit()
         logger.info("collection_complete status=%s adapter=%s succeeded=%s failed=%s", run.status.value, settings.collector_adapter, run.profiles_succeeded, run.profiles_failed)
         return 0 if run.status in {RunStatus.succeeded, RunStatus.partial} else 1
+    except Exception as exc:
+        if "run" in locals():
+            run.status = RunStatus.failed
+            run.error = f"{type(exc).__name__}: {exc}"
+            run.completed_at = utcnow()
+            db.commit()
+        logger.exception("collection_failed error=%s", exc)
+        return 1
     finally:
         if "adapter" in locals():
             adapter.close()

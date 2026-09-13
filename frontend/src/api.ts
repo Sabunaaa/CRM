@@ -4,7 +4,8 @@ export interface Profile { id:string; username:string; instagram_url:string; dis
 export interface Reel { id:string; profile_id:string; shortcode:string; permalink:string; caption:string|null; hashtags:string[]; thumbnail_url:string|null; published_at:string|null; views_count:number|null; likes_count:number|null; comments_count:number|null; metrics_state:MetricState; metrics_observed_at:string|null; views_source:string|null; engagement_rate:number|null; profile_username:string|null }
 export interface MetricSummary { value:number|null; previous_value:number|null; change_percent:number|null; observed_at:string|null; state:MetricState }
 export interface DashboardData { views:MetricSummary; likes:MetricSummary; comments:MetricSummary; followers:MetricSummary; views_series:Array<{observed_at:string;views:number|null}>; top_reels:Reel[]; recent_reels:Reel[] }
-export interface CollectionRun { id:string; status:string; trigger:string; started_at:string; completed_at:string|null; profiles_total:number; profiles_succeeded:number; profiles_failed:number; error:string|null }
+export interface CollectionOutcome { profile_id:string; username:string; status:string; reels_observed:number; message:string|null; started_at:string; completed_at:string|null }
+export interface CollectionRun { id:string; status:string; trigger:string; started_at:string; completed_at:string|null; profiles_total:number; profiles_succeeded:number; profiles_failed:number; error:string|null; outcomes:CollectionOutcome[] }
 export interface KpiMetric { key:"profiles"|"reels"|"views_growth"|"followers_growth"; label:string; actual:number; target:number; unit:string; completion_percent:number|null }
 export interface ManagerKpi { manager:string; focus:string|null; metrics:KpiMetric[]; completion_percent:number|null; plan_updated_at:string|null }
 export interface WeeklyKpi { week_start:string; week_end:string; managers:ManagerKpi[]; team_completion_percent:number|null }

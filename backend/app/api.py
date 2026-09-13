@@ -18,7 +18,7 @@ from .auth import PERSONAS, client_key, create_token, enforce_login_limit, read_
 from .config import get_settings
 from .database import get_db
 from .instagram import normalize_instagram_profile_url
-from .models import CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile, WeeklyKpiPlan, utcnow
+from .models import CollectionOutcome, CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile, WeeklyKpiPlan, utcnow
 from .schemas import DashboardResponse, KpiMetricOut, KpiPlanUpdate, LoginRequest, ManagerKpiOut, MetricSummary, PaginatedProfiles, PaginatedReels, PersonaRequest, ProfileCreate, ProfileOut, ReelOut, SessionResponse, SnapshotPoint, WeeklyKpiResponse
 
 router = APIRouter(prefix="/api")
@@ -351,7 +351,26 @@ def dashboard(days: int = Query(30, ge=1, le=365), start_date: date | None = Que
 @router.get("/collection/runs")
 def collection_runs(limit: int = Query(20, ge=1, le=100), _: dict = Depends(require_session), db: Session = Depends(get_db)):
     rows = db.scalars(select(CollectionRun).order_by(desc(CollectionRun.started_at)).limit(limit)).all()
-    return [{"id": r.id, "status": r.status.value, "trigger": r.trigger, "started_at": r.started_at, "completed_at": r.completed_at, "profiles_total": r.profiles_total, "profiles_succeeded": r.profiles_succeeded, "profiles_failed": r.profiles_failed, "error": r.error} for r in rows]
+    run_ids = [row.id for row in rows]
+    outcomes_by_run: dict[str, list[dict]] = {run_id: [] for run_id in run_ids}
+    if run_ids:
+        outcome_rows = db.execute(
+            select(CollectionOutcome, TrackedProfile.username)
+            .join(TrackedProfile, TrackedProfile.id == CollectionOutcome.profile_id)
+            .where(CollectionOutcome.run_id.in_(run_ids))
+            .order_by(CollectionOutcome.started_at, TrackedProfile.username)
+        ).all()
+        for outcome, username in outcome_rows:
+            outcomes_by_run[outcome.run_id].append({
+                "profile_id": outcome.profile_id,
+                "username": username,
+                "status": outcome.status.value,
+                "reels_observed": outcome.reels_observed,
+                "message": outcome.message,
+                "started_at": outcome.started_at,
+                "completed_at": outcome.completed_at,
+            })
+    return [{"id": r.id, "status": r.status.value, "trigger": r.trigger, "started_at": r.started_at, "completed_at": r.completed_at, "profiles_total": r.profiles_total, "profiles_succeeded": r.profiles_succeeded, "profiles_failed": r.profiles_failed, "error": r.error, "outcomes": outcomes_by_run[r.id]} for r in rows]
 
 
 @router.get("/kpi/weekly", response_model=WeeklyKpiResponse)

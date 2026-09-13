@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from datetime import datetime, timezone
 
-from app.models import CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile
+from app.models import CollectionOutcome, CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile
 
 
 def signed_in_client(persona="Saba"):
@@ -68,6 +68,27 @@ def test_manual_collection_requires_a_persona_and_queues():
     response = client.post("/api/collection/run")
     assert response.status_code == 202
     assert response.json() == {"status": "queued"}
+
+
+def test_collection_runs_include_copyable_per_profile_diagnostics(db):
+    profile = TrackedProfile(username="diagnostic_creator", instagram_url="https://instagram.com/diagnostic_creator/", added_by="Saba")
+    run = CollectionRun(schedule_key="manual:diagnostic", trigger="manual", status=RunStatus.failed, profiles_total=1, profiles_failed=1, error="Browser startup failed")
+    db.add_all([profile, run])
+    db.flush()
+    db.add(CollectionOutcome(run_id=run.id, profile_id=profile.id, status=RunStatus.failed, reels_observed=0, message="Attempt 1/3 failed (TargetClosedError)"))
+    db.commit()
+
+    payload = signed_in_client().get("/api/collection/runs").json()
+    assert payload[0]["error"] == "Browser startup failed"
+    assert payload[0]["outcomes"] == [{
+        "profile_id": profile.id,
+        "username": "diagnostic_creator",
+        "status": "failed",
+        "reels_observed": 0,
+        "message": "Attempt 1/3 failed (TargetClosedError)",
+        "started_at": payload[0]["outcomes"][0]["started_at"],
+        "completed_at": None,
+    }]
 
 
 def test_weekly_kpi_plan_is_shared_and_uses_snapshot_growth(db):

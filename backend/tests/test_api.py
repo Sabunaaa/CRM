@@ -50,3 +50,9 @@ def test_engagement_is_calculated_only_with_complete_inputs(db):
     db.commit()
     payload = client.get(f"/api/reels/{reel.id}").json()
     assert payload["engagement_rate"] is None
+
+
+def test_history_date_ranges_require_chronological_order():
+    client = signed_in_client()
+    response = client.get("/api/dashboard?from=2026-09-13&to=2026-09-12")
+    assert response.status_code == 422

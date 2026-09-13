@@ -136,6 +136,8 @@ Terraform creates the database with backups and point-in-time recovery, stores a
 
 Authenticated endpoints cover session/persona selection, profile creation/listing/archive/history, reel listing/details/history, dashboard summaries, collection-run health, and CSV exports. API documentation is served at `/api/docs` after deployment.
 
+History views accept `from=YYYY-MM-DD` and `to=YYYY-MM-DD` query parameters. Date boundaries use `Asia/Tbilisi`; when omitted, the existing `days` presets are used. Profile and reel listings also accept scrape-date filters (`last_scraped_after`, `last_scraped_before`, `observed_after`, and `observed_before`).
+
 ## Tests
 
 ```bash

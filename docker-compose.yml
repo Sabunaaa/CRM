@@ -16,7 +16,10 @@ services:
       DATABASE_URL: postgresql+psycopg://instatrack:local-password@db:5432/instatrack
       TEAM_PASSWORD_HASH: ${TEAM_PASSWORD_HASH}
       SESSION_SECRET: ${SESSION_SECRET}
-      SECURE_COOKIES: "false"
+      SECURE_COOKIES: "${SECURE_COOKIES:-false}"
+      LOCAL_COLLECTOR_ENABLED: "${LOCAL_COLLECTOR_ENABLED:-true}"
+      COLLECTOR_ADAPTER: "${COLLECTOR_ADAPTER:-scrapling}"
+      APP_TIMEZONE: "${APP_TIMEZONE:-Asia/Tbilisi}"
     ports: ["8080:8080"]
     depends_on: [db]
   collector:

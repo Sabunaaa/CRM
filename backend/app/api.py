@@ -3,8 +3,9 @@ from __future__ import annotations
 import csv
 import asyncio
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
@@ -21,6 +22,26 @@ from .models import CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnaps
 from .schemas import DashboardResponse, LoginRequest, MetricSummary, PaginatedProfiles, PaginatedReels, PersonaRequest, ProfileCreate, ProfileOut, ReelOut, SessionResponse, SnapshotPoint
 
 router = APIRouter(prefix="/api")
+
+
+def _history_bounds(days: int, start_date: date | None, end_date: date | None) -> tuple[datetime, datetime]:
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="The start date must be before the end date")
+    if start_date or end_date:
+        local_tz = ZoneInfo(get_settings().app_timezone)
+        today = datetime.now(local_tz).date()
+        end = end_date or today
+        start = start_date or end - timedelta(days=days)
+        return (
+            datetime.combine(start, time.min, tzinfo=local_tz).astimezone(timezone.utc),
+            datetime.combine(end, time.max, tzinfo=local_tz).astimezone(timezone.utc),
+        )
+    now = utcnow()
+    return now - timedelta(days=days), now
+
+
+def _date_query_params(days: int, start_date: date | None, end_date: date | None) -> tuple[datetime, datetime]:
+    return _history_bounds(days, start_date, end_date)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -93,15 +114,22 @@ def logout(response: Response):
 
 
 @router.get("/profiles", response_model=PaginatedProfiles)
-def list_profiles(search: str = "", include_archived: bool = False, sort: Literal["newest", "followers", "username"] = "newest", limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+def list_profiles(search: str = "", include_archived: bool = False, sort: Literal["newest", "followers", "username", "last_collected"] = "newest", last_scraped_after: date | None = Query(None), last_scraped_before: date | None = Query(None), limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), _: dict = Depends(require_session), db: Session = Depends(get_db)):
     conditions = []
     if not include_archived:
         conditions.append(TrackedProfile.is_active.is_(True))
     if search:
         token = f"%{search.strip()}%"
         conditions.append(or_(TrackedProfile.username.ilike(token), TrackedProfile.display_name.ilike(token)))
+    local_tz = ZoneInfo(get_settings().app_timezone)
+    if last_scraped_after:
+        after_at = datetime.combine(last_scraped_after, time.min, tzinfo=local_tz).astimezone(timezone.utc)
+        conditions.append(TrackedProfile.last_collected_at >= after_at)
+    if last_scraped_before:
+        before_at = datetime.combine(last_scraped_before + timedelta(days=1), time.min, tzinfo=local_tz).astimezone(timezone.utc)
+        conditions.append(TrackedProfile.last_collected_at < before_at)
     query = select(TrackedProfile).where(*conditions)
-    order = {"newest": desc(TrackedProfile.created_at), "followers": desc(TrackedProfile.followers_count), "username": TrackedProfile.username}[sort]
+    order = {"newest": desc(TrackedProfile.created_at), "followers": desc(TrackedProfile.followers_count), "username": TrackedProfile.username, "last_collected": desc(TrackedProfile.last_collected_at).nullslast()}[sort]
     total = db.scalar(select(func.count(TrackedProfile.id)).where(*conditions)) or 0
     items = db.scalars(query.order_by(order).limit(limit).offset(offset)).all()
     return PaginatedProfiles(items=list(items), total=total)
@@ -148,9 +176,9 @@ def get_profile(profile_id: str, _: dict = Depends(require_session), db: Session
 
 
 @router.get("/profiles/{profile_id}/history", response_model=list[SnapshotPoint])
-def profile_history(profile_id: str, days: int = Query(30, ge=1, le=365), _: dict = Depends(require_session), db: Session = Depends(get_db)):
-    cutoff = utcnow() - timedelta(days=days)
-    rows = db.scalars(select(ProfileSnapshot).where(ProfileSnapshot.profile_id == profile_id, ProfileSnapshot.observed_at >= cutoff).order_by(ProfileSnapshot.observed_at)).all()
+def profile_history(profile_id: str, days: int = Query(30, ge=1, le=365), start_date: date | None = Query(None, alias="from"), end_date: date | None = Query(None, alias="to"), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+    start_at, end_at = _date_query_params(days, start_date, end_date)
+    rows = db.scalars(select(ProfileSnapshot).where(ProfileSnapshot.profile_id == profile_id, ProfileSnapshot.observed_at >= start_at, ProfileSnapshot.observed_at <= end_at).order_by(ProfileSnapshot.observed_at)).all()
     return [SnapshotPoint(observed_at=row.observed_at, value=row.followers_count, state=row.state.value) for row in rows]
 
 
@@ -165,13 +193,22 @@ def archive_profile(profile_id: str, _: str = Depends(require_persona), db: Sess
 
 
 @router.get("/reels", response_model=PaginatedReels)
-def list_reels(search: str = "", profile_id: str | None = None, sort: Literal["newest", "views", "engagement"] = "newest", limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+def list_reels(search: str = "", profile_id: str | None = None, sort: Literal["newest", "views", "engagement"] = "newest", observed_after: date | None = Query(None), observed_before: date | None = Query(None), limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), _: dict = Depends(require_session), db: Session = Depends(get_db)):
     conditions = [TrackedProfile.is_active.is_(True)]
     if profile_id:
         conditions.append(Reel.profile_id == profile_id)
     if search:
         token = f"%{search.strip()}%"
         conditions.append(or_(Reel.caption.ilike(token), TrackedProfile.username.ilike(token)))
+    if observed_after and observed_before and observed_after > observed_before:
+        raise HTTPException(status_code=422, detail="The scrape start date must be before the end date")
+    local_tz = ZoneInfo(get_settings().app_timezone)
+    if observed_after:
+        after_at = datetime.combine(observed_after, time.min, tzinfo=local_tz).astimezone(timezone.utc)
+        conditions.append(Reel.metrics_observed_at >= after_at)
+    if observed_before:
+        before_at = datetime.combine(observed_before + timedelta(days=1), time.min, tzinfo=local_tz).astimezone(timezone.utc)
+        conditions.append(Reel.metrics_observed_at < before_at)
     base = select(Reel).join(TrackedProfile).where(*conditions)
     if sort == "views":
         order = desc(Reel.views_count)
@@ -194,9 +231,9 @@ def get_reel(reel_id: str, _: dict = Depends(require_session), db: Session = Dep
 
 
 @router.get("/reels/{reel_id}/history")
-def reel_history(reel_id: str, days: int = Query(30, ge=1, le=365), _: dict = Depends(require_session), db: Session = Depends(get_db)):
-    cutoff = utcnow() - timedelta(days=days)
-    rows = db.scalars(select(ReelSnapshot).where(ReelSnapshot.reel_id == reel_id, ReelSnapshot.observed_at >= cutoff).order_by(ReelSnapshot.observed_at)).all()
+def reel_history(reel_id: str, days: int = Query(30, ge=1, le=365), start_date: date | None = Query(None, alias="from"), end_date: date | None = Query(None, alias="to"), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+    start_at, end_at = _date_query_params(days, start_date, end_date)
+    rows = db.scalars(select(ReelSnapshot).where(ReelSnapshot.reel_id == reel_id, ReelSnapshot.observed_at >= start_at, ReelSnapshot.observed_at <= end_at).order_by(ReelSnapshot.observed_at)).all()
     return [{"observed_at": row.observed_at, "views": row.views_count, "likes": row.likes_count, "comments": row.comments_count, "state": row.state.value, "views_source": row.views_source} for row in rows]
 
 
@@ -205,8 +242,8 @@ def _metric_summary(current: int | None, previous: int | None, observed_at: date
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
-def dashboard(days: int = Query(30, ge=1, le=365), _: dict = Depends(require_session), db: Session = Depends(get_db)):
-    cutoff = utcnow() - timedelta(days=days)
+def dashboard(days: int = Query(30, ge=1, le=365), start_date: date | None = Query(None, alias="from"), end_date: date | None = Query(None, alias="to"), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+    start_at, end_at = _date_query_params(days, start_date, end_date)
     reels = db.scalars(select(Reel).join(TrackedProfile).where(TrackedProfile.is_active.is_(True))).all()
     profiles = db.scalars(select(TrackedProfile).where(TrackedProfile.is_active.is_(True))).all()
     current = {
@@ -220,7 +257,7 @@ def dashboard(days: int = Query(30, ge=1, le=365), _: dict = Depends(require_ses
         select(func.max(ReelSnapshot.observed_at), func.sum(ReelSnapshot.views_count))
         .join(Reel, Reel.id == ReelSnapshot.reel_id)
         .join(TrackedProfile, TrackedProfile.id == Reel.profile_id)
-        .where(ReelSnapshot.observed_at >= cutoff, TrackedProfile.is_active.is_(True))
+        .where(ReelSnapshot.observed_at >= start_at, ReelSnapshot.observed_at <= end_at, TrackedProfile.is_active.is_(True))
         .group_by(ReelSnapshot.run_id)
         .order_by(func.max(ReelSnapshot.observed_at))
     ).all()

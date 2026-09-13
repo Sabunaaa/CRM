@@ -8,8 +8,11 @@ RUN npm run build
 FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080
 WORKDIR /app
-COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY backend/requirements.txt backend/requirements-collector.txt ./
+RUN pip install --no-cache-dir -r requirements-collector.txt \
+    && scrapling install \
+    && chmod -R a+rX /ms-playwright
 COPY backend/app ./app
 COPY --from=frontend /build/frontend/dist ./frontend_dist
 USER 65532:65532

@@ -44,7 +44,12 @@ def favicon():
 
 @app.get("/{full_path:path}", include_in_schema=False)
 def spa(full_path: str):
-    index = frontend_dir / "index.html"
+    root = frontend_dir.resolve()
+    requested_file = (root / full_path).resolve()
+    if requested_file.is_relative_to(root) and requested_file.is_file():
+        return FileResponse(requested_file)
+
+    index = root / "index.html"
     if index.exists():
         return FileResponse(index)
     return JSONResponse(status_code=404, content={"detail": "Frontend build not found"})

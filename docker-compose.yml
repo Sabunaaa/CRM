@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: instatrack
       POSTGRES_USER: instatrack
@@ -10,8 +11,15 @@ services:
     # Compose network and do not need a host port.
     ports: ["127.0.0.1:5432:5432"]
     volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U instatrack -d instatrack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
   api:
+    image: instatrack-app:local
     build: .
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://instatrack:local-password@db:5432/instatrack
       TEAM_PASSWORD_HASH: ${TEAM_PASSWORD_HASH}
@@ -21,16 +29,20 @@ services:
       COLLECTOR_ADAPTER: "${COLLECTOR_ADAPTER:-scrapling}"
       APP_TIMEZONE: "${APP_TIMEZONE:-Asia/Tbilisi}"
     ports: ["8080:8080"]
-    depends_on: [db]
+    depends_on:
+      db:
+        condition: service_healthy
   collector:
-    build:
-      context: .
-      dockerfile: Dockerfile.collector
+    image: instatrack-app:local
+    entrypoint: ["python", "-m", "app.collector"]
+    command: ["--trigger", "scheduled"]
     environment:
       DATABASE_URL: postgresql+psycopg://instatrack:local-password@db:5432/instatrack
       COLLECTION_DELAY_SECONDS: "5"
       COLLECTOR_ADAPTER: "scrapling"
-    depends_on: [db]
+    depends_on:
+      db:
+        condition: service_healthy
     profiles: ["manual"]
 volumes:
   postgres_data:

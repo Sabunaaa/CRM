@@ -27,15 +27,28 @@ wait_for_package_manager() {
   done
 }
 
-echo "Installing VM dependencies..."
-wait_for_package_manager
-sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  docker.io docker-compose-v2 git python3-venv openssl
+vm_dependencies_ready() {
+  command -v git >/dev/null 2>&1 \
+    && command -v python3 >/dev/null 2>&1 \
+    && command -v openssl >/dev/null 2>&1 \
+    && command -v docker >/dev/null 2>&1 \
+    && sudo docker compose version >/dev/null 2>&1 \
+    && systemctl list-unit-files cron.service >/dev/null 2>&1
+}
+
+if vm_dependencies_ready; then
+  echo "VM dependencies are already installed."
+else
+  echo "Installing VM dependencies (first run only)..."
+  wait_for_package_manager
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    cron docker.io docker-compose-v2 git python3-venv openssl
+fi
 sudo systemctl enable --now docker
+sudo systemctl enable --now cron
 
 echo "Updating the repository..."
-git fetch origin "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 
 if [[ ! -f .env ]]; then
@@ -73,8 +86,8 @@ else
 fi
 
 chmod 600 .env
-echo "Building the API and Scrapling images..."
-"${COMPOSE[@]}" --profile manual build api collector
+echo "Building the shared application image..."
+"${COMPOSE[@]}" build api
 echo "Starting the CRM..."
 "${COMPOSE[@]}" up -d --remove-orphans
 

@@ -9,9 +9,31 @@ InstaTrack is a shared Instagram analytics workspace for Dachi, Lui, and Saba. O
 - Nullable metric storage with explicit available, unavailable, stale, and failed states.
 - Anonymous Scrapling browser collection of follower counts and the newest 30 reels, including views, likes, comments, captions, hashtags, creator details, and publication dates when Instagram exposes them. Instaloader remains available as an explicit fallback adapter.
 - PostgreSQL history, signed secure sessions, Argon2 password verification, persistent login throttling, and persona attribution.
-- Cloud Run API/frontend service, separate Cloud Run collector job, Cloud SQL, Secret Manager, and Cloud Scheduler at `00:00` and `12:00` in `Asia/Tbilisi`.
+- GCP Compute Engine VM hosting with Docker Compose, PostgreSQL on a persistent Docker volume, and Scrapling collection scheduled by VM cron at `00:00` and `12:00` in `Asia/Tbilisi`.
 
 Anonymous Instagram collection is intentionally best effort. It stops on login challenges or throttling and keeps the last successful values as stale. It does not bypass Instagram access controls.
+
+## Production architecture
+
+The active production target is one Ubuntu Compute Engine VM. The API container serves both FastAPI and the built React application on port `8080`. PostgreSQL runs in a private container and exposes its host port only on `127.0.0.1`. A separate collector container runs from VM cron twice per day; adding a profile can also trigger the Scrapling collector inside the API container for the initial fetch.
+
+```mermaid
+flowchart LR
+    Browser[Browser] -->|HTTP :8080| VM[Compute Engine VM]
+    subgraph VM
+      API[React + FastAPI container]
+      DB[(PostgreSQL volume)]
+      Cron[VM cron: 00:00 and 12:00]
+      Collector[Scrapling collector container]
+      API --> DB
+      Cron --> Collector
+      Collector --> DB
+    end
+    API --> Instagram[Public Instagram pages]
+    Collector --> Instagram
+```
+
+Docker restarts the API and database automatically after a VM reboot. Team-password verification material and the session secret live in the VM's permission-restricted `.env` file. HTTPS can be added in front of port `8080` with Caddy, Nginx, or a Google Cloud load balancer.
 
 ## Start locally with one click
 
@@ -60,16 +82,24 @@ The application is then available at `http://localhost:8080`. Run a manual colle
 docker compose --profile manual run --rm collector --trigger manual
 ```
 
-### Update a Compute Engine VM with one command
+## Deploy on GCP Compute Engine
 
-The VM workflow keeps the application, PostgreSQL, and Scrapling collector in Docker Compose. From the cloned repository on the VM, run:
+Create an Ubuntu VM with at least 2 vCPUs and 4 GB RAM, attach a static external IP, and allow inbound TCP `8080` while testing. Clone the repository on the VM, then run:
 
 ```bash
 chmod +x scripts/update_vm.sh
 ./scripts/update_vm.sh
 ```
 
-The first run installs Docker, asks for the shared password, creates `.env`, builds both images, starts the stack, and installs the midnight/noon `Asia/Tbilisi` collector schedule. Later runs pull the selected Git branch (default `main`), rebuild changed images, restart the services, and preserve the existing secrets. Set `VM_BRANCH` before running if the VM should follow another branch.
+The first run installs Docker and cron, asks for the shared password, creates `.env`, builds the application image, starts the stack, and installs the midnight/noon `Asia/Tbilisi` schedule. The API and scheduled collector share that image, so Scrapling and its browser are built only once. Later runs skip Ubuntu package installation, pull the selected Git branch (default `main`), reuse Docker's dependency layers, rebuild changed application files, restart the services, and preserve PostgreSQL data and existing secrets. Set `VM_BRANCH` before running if the VM should follow another branch.
+
+Open `http://VM_EXTERNAL_IP:8080`. For future GitHub updates, run the same command again. Check the running services and collector log with:
+
+```bash
+sudo docker compose ps
+sudo docker compose logs -f api
+sudo tail -f /var/log/instatrack-collector.log
+```
 
 ## Validate anonymous collection
 
@@ -82,9 +112,15 @@ cd backend
 
 To compare the previous collector, pass `--adapter instaloader`. Scrapling uses a rendered anonymous browser session and captures public Instagram page/API responses. It stops and reports an unavailable or throttled state when Instagram presents a login wall, challenge, or rate limit; it does not solve or bypass those controls.
 
-Run the same collector image as a one-off Cloud Run job in the target GCP project before relying on the metrics. Confirm `followers_available`, reel discovery, and `views_available` against the public Instagram pages. If follower counts or reel views are blocked from GCP, the stated no-login requirement conflicts with dependable collection and those values will remain unavailable.
+Run the collector from the deployed VM before relying on the metrics. Confirm `followers_available`, reel discovery, and `views_available` against the public Instagram pages. If follower counts or reel views are blocked from the VM's GCP IP, the stated no-login requirement conflicts with dependable collection and those values will remain unavailable.
 
-## Deploy to GCP
+```bash
+sudo docker compose --profile manual run --rm collector --trigger manual
+```
+
+## Optional legacy managed GCP deployment
+
+The repository still contains the earlier Cloud Run, Cloud SQL, Cloud Scheduler, and Terraform deployment path. It is retained for a future migration but is not the active VM architecture.
 
 ### Easiest first deployment
 

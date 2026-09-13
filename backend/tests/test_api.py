@@ -124,3 +124,33 @@ def test_weekly_kpi_plan_is_shared_and_uses_snapshot_growth(db):
     shared = saba.get("/api/kpi/weekly?week_start=2026-09-07").json()
     assert next(item for item in shared["managers"] if item["manager"] == "Dachi")["focus"] == "Add strong creators"
     assert saba.put("/api/kpi/weekly?week_start=2026-09-07", json={"profiles_target": -1, "reels_target": 0, "views_growth_target": 0, "followers_growth_target": 0}).status_code == 422
+
+
+def test_text_kpis_are_personal_checkable_and_reported(db):
+    dachi = signed_in_client("Dachi")
+    created = dachi.post("/api/kpi/items?week_start=2026-09-09", json={"text": "  Add three creators  "})
+    assert created.status_code == 201
+    item = created.json()
+    assert item["week_start"] == "2026-09-07"
+    assert item["manager"] == "Dachi"
+    assert item["text"] == "Add three creators"
+    assert item["completed"] is False
+
+    checked = dachi.put(f"/api/kpi/items/{item['id']}", json={"completed": True})
+    assert checked.status_code == 200
+    assert checked.json()["completed"] is True
+    assert checked.json()["completed_at"] is not None
+
+    lui = signed_in_client("Lui")
+    assert lui.put(f"/api/kpi/items/{item['id']}", json={"completed": False}).status_code == 403
+    list_payload = lui.get("/api/kpi/items?week_start=2026-09-07&manager=Dachi").json()
+    assert list_payload["completed_count"] == 1
+    assert list_payload["completion_percent"] == 100.0
+
+    report = lui.get("/api/reports/managers?week_start=2026-09-07").json()
+    dachi_report = next(row for row in report if row["manager"] == "Dachi")
+    assert dachi_report["kpis_completed"] == 1
+    assert dachi_report["kpis_total"] == 1
+    assert dachi_report["kpi_percent"] == 100.0
+
+    assert dachi.delete(f"/api/kpi/items/{item['id']}").status_code == 204

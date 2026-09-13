@@ -4,6 +4,7 @@ import { BarChart3, CircleAlert, Clock3, FileQuestion, Heart, Search, Trophy, Us
 import { api, MetricState, Profile, Reel } from "./api";
 import { demoProfiles, demoReels } from "./demo";
 import { LeaderboardEntry, LeaderboardEntryIcon, LeaderboardPodium } from "./LeaderboardPodium";
+import dachiPfp from "./assets/dachi-pfp.png";
 
 const demoMode = new URLSearchParams(window.location.search).get("demo") === "1";
 type Board = "profiles" | "reels" | "managers";
@@ -11,7 +12,7 @@ type ReelMetric = "views" | "engagement";
 type ManagerMetric = "followers" | "views" | "engagement";
 
 const managerConfig = [
-  { name: "Dachi", avatarUrl: "/dachi-pfp.png" },
+  { name: "Dachi", avatarUrl: dachiPfp },
   { name: "Lui", avatarUrl: null },
   { name: "Saba", avatarUrl: null },
 ] as const;

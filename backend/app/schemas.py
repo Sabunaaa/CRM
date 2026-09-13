@@ -123,3 +123,42 @@ class WeeklyKpiResponse(BaseModel):
     week_end: date
     managers: list[ManagerKpiOut]
     team_completion_percent: float | None
+
+
+class KpiItemCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class KpiItemUpdate(BaseModel):
+    completed: bool
+
+
+class KpiItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    week_start: date
+    manager: str
+    text: str
+    completed: bool
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class WeeklyKpiItemsResponse(BaseModel):
+    week_start: date
+    week_end: date
+    manager: str
+    items: list[KpiItemOut]
+    completed_count: int
+    completion_percent: float | None
+
+
+class ManagerReportOut(BaseModel):
+    manager: str
+    profiles: int
+    reels: int
+    total_views: int
+    followers: int
+    kpis_completed: int
+    kpis_total: int
+    kpi_percent: float | None

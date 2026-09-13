@@ -159,3 +159,17 @@ class WeeklyKpiPlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     __table_args__ = (UniqueConstraint("week_start", "manager", name="uq_kpi_plan_week_manager"),)
+
+
+class WeeklyKpiItem(Base):
+    __tablename__ = "weekly_kpi_items"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    week_start: Mapped[date] = mapped_column(Date, index=True)
+    manager: Mapped[str] = mapped_column(String(16), index=True)
+    text: Mapped[str] = mapped_column(String(500))
+    completed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    __table_args__ = (Index("ix_kpi_item_week_manager", "week_start", "manager"),)

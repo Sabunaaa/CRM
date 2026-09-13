@@ -18,8 +18,8 @@ from .auth import PERSONAS, client_key, create_token, enforce_login_limit, read_
 from .config import get_settings
 from .database import get_db
 from .instagram import normalize_instagram_profile_url
-from .models import CollectionOutcome, CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile, WeeklyKpiPlan, utcnow
-from .schemas import DashboardResponse, KpiMetricOut, KpiPlanUpdate, LoginRequest, ManagerKpiOut, MetricSummary, PaginatedProfiles, PaginatedReels, PersonaRequest, ProfileCreate, ProfileOut, ReelOut, SessionResponse, SnapshotPoint, WeeklyKpiResponse
+from .models import CollectionOutcome, CollectionRun, MetricState, ProfileSnapshot, Reel, ReelSnapshot, RunStatus, TrackedProfile, WeeklyKpiItem, WeeklyKpiPlan, utcnow
+from .schemas import DashboardResponse, KpiItemCreate, KpiItemOut, KpiItemUpdate, KpiMetricOut, KpiPlanUpdate, LoginRequest, ManagerKpiOut, ManagerReportOut, MetricSummary, PaginatedProfiles, PaginatedReels, PersonaRequest, ProfileCreate, ProfileOut, ReelOut, SessionResponse, SnapshotPoint, WeeklyKpiItemsResponse, WeeklyKpiResponse
 
 router = APIRouter(prefix="/api")
 
@@ -127,6 +127,22 @@ def _weekly_kpis(db: Session, selected_week: date | None) -> WeeklyKpiResponse:
         managers.append(ManagerKpiOut(manager=manager, focus=plan.focus if plan else None, metrics=metrics, completion_percent=completion, plan_updated_at=plan.updated_at if plan else None))
 
     return WeeklyKpiResponse(week_start=monday, week_end=sunday, managers=managers, team_completion_percent=round(sum(team_percentages) / len(team_percentages), 1) if team_percentages else None)
+
+
+def _weekly_kpi_items(db: Session, selected_week: date | None, manager: str) -> WeeklyKpiItemsResponse:
+    if manager not in PERSONAS:
+        raise HTTPException(status_code=422, detail="Unknown manager")
+    monday, sunday, _, _ = _week_dates(selected_week)
+    items = list(db.scalars(select(WeeklyKpiItem).where(WeeklyKpiItem.week_start == monday, WeeklyKpiItem.manager == manager).order_by(WeeklyKpiItem.created_at, WeeklyKpiItem.id)).all())
+    completed = sum(item.completed for item in items)
+    return WeeklyKpiItemsResponse(
+        week_start=monday,
+        week_end=sunday,
+        manager=manager,
+        items=[KpiItemOut.model_validate(item) for item in items],
+        completed_count=completed,
+        completion_percent=round(completed / len(items) * 100, 1) if items else None,
+    )
 
 
 async def _trigger_collector_job(username: str | None = None) -> None:
@@ -393,6 +409,68 @@ def save_weekly_kpi_plan(payload: KpiPlanUpdate, week_start: date | None = Query
     plan.focus = focus
     db.commit()
     return _weekly_kpis(db, monday)
+
+
+@router.get("/kpi/items", response_model=WeeklyKpiItemsResponse)
+def weekly_kpi_items(manager: str, week_start: date | None = Query(None), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+    return _weekly_kpi_items(db, week_start, manager)
+
+
+@router.post("/kpi/items", response_model=KpiItemOut, status_code=status.HTTP_201_CREATED)
+def add_weekly_kpi_item(payload: KpiItemCreate, week_start: date | None = Query(None), persona: str = Depends(require_persona), db: Session = Depends(get_db)):
+    monday, _, _, _ = _week_dates(week_start)
+    text_value = payload.text.strip()
+    if not text_value:
+        raise HTTPException(status_code=422, detail="KPI text is required")
+    item = WeeklyKpiItem(week_start=monday, manager=persona, text=text_value, created_by=persona)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.put("/kpi/items/{item_id}", response_model=KpiItemOut)
+def update_weekly_kpi_item(item_id: str, payload: KpiItemUpdate, persona: str = Depends(require_persona), db: Session = Depends(get_db)):
+    item = db.get(WeeklyKpiItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="KPI was not found")
+    if item.manager != persona:
+        raise HTTPException(status_code=403, detail="You can only update your own KPIs")
+    item.completed = payload.completed
+    item.completed_at = utcnow() if payload.completed else None
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.delete("/kpi/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_weekly_kpi_item(item_id: str, persona: str = Depends(require_persona), db: Session = Depends(get_db)):
+    item = db.get(WeeklyKpiItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="KPI was not found")
+    if item.manager != persona:
+        raise HTTPException(status_code=403, detail="You can only delete your own KPIs")
+    db.delete(item)
+    db.commit()
+
+
+@router.get("/reports/managers", response_model=list[ManagerReportOut])
+def manager_reports(week_start: date | None = Query(None), _: dict = Depends(require_session), db: Session = Depends(get_db)):
+    monday, _, _, _ = _week_dates(week_start)
+    reports: list[ManagerReportOut] = []
+    for manager in ("Dachi", "Lui", "Saba"):
+        profile_ids = list(db.scalars(select(TrackedProfile.id).where(TrackedProfile.added_by == manager, TrackedProfile.is_active.is_(True))).all())
+        profile_count = len(profile_ids)
+        followers = 0
+        reels = 0
+        views = 0
+        if profile_ids:
+            followers = int(db.scalar(select(func.coalesce(func.sum(TrackedProfile.followers_count), 0)).where(TrackedProfile.id.in_(profile_ids))) or 0)
+            reels, views = db.execute(select(func.count(Reel.id), func.coalesce(func.sum(Reel.views_count), 0)).where(Reel.profile_id.in_(profile_ids))).one()
+        kpis = list(db.scalars(select(WeeklyKpiItem).where(WeeklyKpiItem.week_start == monday, WeeklyKpiItem.manager == manager)).all())
+        completed = sum(item.completed for item in kpis)
+        reports.append(ManagerReportOut(manager=manager, profiles=profile_count, reels=int(reels), total_views=int(views), followers=followers, kpis_completed=completed, kpis_total=len(kpis), kpi_percent=round(completed / len(kpis) * 100, 1) if kpis else None))
+    return reports
 
 
 @router.post("/collection/run", status_code=status.HTTP_202_ACCEPTED)

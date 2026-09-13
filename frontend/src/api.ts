@@ -9,5 +9,8 @@ export interface CollectionRun { id:string; status:string; trigger:string; start
 export interface KpiMetric { key:"profiles"|"reels"|"views_growth"|"followers_growth"; label:string; actual:number; target:number; unit:string; completion_percent:number|null }
 export interface ManagerKpi { manager:string; focus:string|null; metrics:KpiMetric[]; completion_percent:number|null; plan_updated_at:string|null }
 export interface WeeklyKpi { week_start:string; week_end:string; managers:ManagerKpi[]; team_completion_percent:number|null }
+export interface KpiItem { id:string; week_start:string; manager:string; text:string; completed:boolean; completed_at:string|null; created_at:string }
+export interface WeeklyKpiItems { week_start:string; week_end:string; manager:string; items:KpiItem[]; completed_count:number; completion_percent:number|null }
+export interface ManagerReport { manager:string; profiles:number; reels:number; total_views:number; followers:number; kpis_completed:number; kpis_total:number; kpi_percent:number|null }
 export class ApiError extends Error { constructor(message:string, public status:number){super(message)} }
 export async function api<T>(path:string,options:RequestInit={}):Promise<T>{const response=await fetch(`/api${path}`,{credentials:"include",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});if(!response.ok){const body=await response.json().catch(()=>({detail:"Request failed"}));throw new ApiError(body.detail||"Request failed",response.status)}if(response.status===204)return undefined as T;return response.json()}

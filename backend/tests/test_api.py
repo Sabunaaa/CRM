@@ -56,3 +56,13 @@ def test_history_date_ranges_require_chronological_order():
     client = signed_in_client()
     response = client.get("/api/dashboard?from=2026-09-13&to=2026-09-12")
     assert response.status_code == 422
+
+
+def test_manual_collection_requires_a_persona_and_queues():
+    client = TestClient(app)
+    assert client.post("/api/auth/login", json={"password": "team-secret"}).status_code == 200
+    assert client.post("/api/collection/run").status_code == 428
+    assert client.post("/api/auth/persona", json={"persona": "Dachi"}).status_code == 200
+    response = client.post("/api/collection/run")
+    assert response.status_code == 202
+    assert response.json() == {"status": "queued"}

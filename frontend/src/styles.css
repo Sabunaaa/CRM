@@ -49,6 +49,8 @@ button{font-family:inherit}.primary,.secondary-button{min-height:42px;border-rad
 @media(max-width:760px){.history-filters{justify-content:flex-start;width:100%}.page-heading .history-filters .date-control{display:flex}.date-input.compact{flex:1;min-width:180px}}
 @media(max-width:480px){.history-filters{display:grid;grid-template-columns:1fr 1fr;width:100%}.history-filters .date-control{grid-column:1/-1}.date-input{width:100%}.date-input input{min-width:0;width:100%}}
 .date-control select{border:0;outline:0;appearance:none;background:transparent;color:inherit;font-size:13px;font-weight:600;cursor:pointer}.date-control svg:last-child{margin-left:-5px}
+.manual-scrape-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center}.manual-scrape-card .secondary-button:disabled{opacity:.6;cursor:wait}.scrape-success,.scrape-error{display:block;margin-top:7px;font-size:11px;font-weight:700}.scrape-success{color:#178958}.scrape-error{color:#c63850}
+@media(max-width:760px){.manual-scrape-card{grid-template-columns:auto 1fr}.manual-scrape-card>button{grid-column:2;width:max-content}}
 
 .leaderboard-heading { align-items: flex-start; }
 .leaderboard-updated { display: inline-flex; align-items: center; gap: 8px; padding: 10px 13px; border: 1px solid var(--border); border-radius: 11px; background: #fff; color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }

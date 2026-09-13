@@ -288,6 +288,12 @@ def collection_runs(limit: int = Query(20, ge=1, le=100), _: dict = Depends(requ
     return [{"id": r.id, "status": r.status.value, "trigger": r.trigger, "started_at": r.started_at, "completed_at": r.completed_at, "profiles_total": r.profiles_total, "profiles_succeeded": r.profiles_succeeded, "profiles_failed": r.profiles_failed, "error": r.error} for r in rows]
 
 
+@router.post("/collection/run", status_code=status.HTTP_202_ACCEPTED)
+async def start_manual_collection(background_tasks: BackgroundTasks, _: str = Depends(require_persona)):
+    background_tasks.add_task(_trigger_collector_job)
+    return {"status": "queued"}
+
+
 @router.get("/export/profiles.csv")
 def export_profiles(_: dict = Depends(require_session), db: Session = Depends(get_db)):
     output = io.StringIO()

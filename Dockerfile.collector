@@ -1,11 +1,17 @@
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/home/instatrack \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements-collector.txt ./
 RUN pip install --no-cache-dir -r requirements-collector.txt \
-    && scrapling install \
-    && chmod -R a+rX /ms-playwright
+    && scrapling install --force \
+    && groupadd --gid 10001 instatrack \
+    && useradd --uid 10001 --gid instatrack --create-home --home-dir /home/instatrack --shell /usr/sbin/nologin instatrack \
+    && chmod -R a+rX /ms-playwright \
+    && chown -R instatrack:instatrack /home/instatrack
 COPY backend/app ./app
-USER 65532:65532
+USER instatrack
 ENTRYPOINT ["python", "-m", "app.collector"]
 CMD ["--trigger", "scheduled"]

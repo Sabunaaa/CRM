@@ -20,6 +20,8 @@ services:
     image: instatrack-app:local
     build: .
     restart: unless-stopped
+    init: true
+    ipc: host
     environment:
       DATABASE_URL: postgresql+psycopg://instatrack:local-password@db:5432/instatrack
       TEAM_PASSWORD_HASH: ${TEAM_PASSWORD_HASH}
@@ -34,6 +36,8 @@ services:
         condition: service_healthy
   collector:
     image: instatrack-app:local
+    init: true
+    ipc: host
     entrypoint: ["python", "-m", "app.collector"]
     command: ["--trigger", "scheduled"]
     environment:

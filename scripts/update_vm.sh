@@ -91,6 +91,12 @@ echo "Building the shared application image..."
 echo "Starting the CRM..."
 "${COMPOSE[@]}" up -d --remove-orphans
 
+echo "Checking the Scrapling browser..."
+if ! "${COMPOSE[@]}" exec -T api python -m app.browser_check; then
+  echo "The CRM is running, but Chromium could not start. The detailed browser error is shown above." >&2
+  exit 1
+fi
+
 CRON_FILE=/etc/cron.d/instatrack-collector
 sudo tee "$CRON_FILE" >/dev/null <<EOF
 SHELL=/bin/bash

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
 from itertools import islice
+from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.parse import urlparse
 
@@ -16,6 +18,7 @@ import instaloader
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
 HASHTAG_RE = re.compile(r"(?<!\w)#([\w.]+)", re.UNICODE)
+logger = logging.getLogger("instatrack.instagram")
 
 
 class CollectionUnavailable(RuntimeError):
@@ -24,6 +27,21 @@ class CollectionUnavailable(RuntimeError):
 
 class CollectionThrottled(RuntimeError):
     pass
+
+
+def _browser_error_detail(exc: Exception) -> str:
+    lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
+    diagnostic_lines = [
+        line
+        for line in lines
+        if "[err]" in line
+        or "process did exit" in line.lower()
+        or "executable doesn't exist" in line.lower()
+        or "permission denied" in line.lower()
+        or "no usable sandbox" in line.lower()
+    ]
+    detail = " | ".join(diagnostic_lines[-4:]) if diagnostic_lines else (lines[0] if lines else "")
+    return detail[:800]
 
 
 def normalize_instagram_profile_url(value: str) -> tuple[str, str]:
@@ -410,6 +428,7 @@ class ScraplingInstagramAdapter:
         self.reel_delay_seconds = reel_delay_seconds
         self._manager = None
         self._session = None
+        self._browser_profile = None
 
     def _ensure_session(self):
         if self._session is not None:
@@ -418,18 +437,26 @@ class ScraplingInstagramAdapter:
             from scrapling.fetchers import StealthySession
         except ImportError as exc:
             raise CollectionUnavailable("Scrapling is not installed; install backend/requirements-collector.txt") from exc
-        self._manager = StealthySession(
-            headless=True,
-            block_webrtc=True,
-            hide_canvas=True,
-            block_ads=True,
-            locale="en-US",
-            timezone_id="Asia/Tbilisi",
-        )
+        self._browser_profile = TemporaryDirectory(prefix="instatrack-scrapling-")
         try:
+            self._manager = StealthySession(
+                headless=True,
+                block_webrtc=True,
+                hide_canvas=True,
+                block_ads=True,
+                locale="en-US",
+                timezone_id="Asia/Tbilisi",
+                user_data_dir=self._browser_profile.name,
+            )
             self._session = self._manager.__enter__()
         except Exception as exc:
-            raise CollectionUnavailable(f"Scrapling browser could not start: {type(exc).__name__}") from exc
+            logger.exception("Scrapling browser startup failed")
+            self._manager = None
+            self._browser_profile.cleanup()
+            self._browser_profile = None
+            detail = _browser_error_detail(exc)
+            suffix = f": {detail}" if detail else ""
+            raise CollectionUnavailable(f"Scrapling browser could not start ({type(exc).__name__}){suffix}") from exc
         return self._session
 
     @staticmethod
@@ -503,12 +530,15 @@ class ScraplingInstagramAdapter:
         return profile
 
     def close(self) -> None:
-        if self._manager is not None:
-            try:
+        try:
+            if self._manager is not None:
                 self._manager.__exit__(None, None, None)
-            finally:
-                self._manager = None
-                self._session = None
+        finally:
+            self._manager = None
+            self._session = None
+            if self._browser_profile is not None:
+                self._browser_profile.cleanup()
+                self._browser_profile = None
 
 
 def create_instagram_adapter(name: str, timeout_ms: int = 45_000, reel_delay_seconds: float = 1.0):
